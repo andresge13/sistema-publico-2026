@@ -1,0 +1,90 @@
+body {
+  font-family: Arial, sans-serif;
+  background-color: #f1f1f1;
+  margin: 0;
+  padding: 0;
+  padding-bottom: 70px;
+}
+
+.container {
+  border: 2px solid #001e36;
+  padding: 20px;
+  max-width: 90%;
+  margin: 40px auto;
+  text-align: center;
+  background-color: white;
+  box-sizing: border-box;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.logo {
+  width: 80px;
+}
+
+h1 {
+  font-weight: bold;
+  text-align: center;
+  font-size: 24px;
+  color: #001e36;
+}
+
+.clock {
+  font-size: 50px;
+  font-weight: bold;
+  color: #043d69;
+  margin-bottom: 3px;
+  margin-top: -45px;
+}
+
+.subtitle {
+  margin-bottom: 20px;
+  background-color: #043d69;
+  color: white;
+  padding: 10px;
+  font-weight: bold;
+}
+
+.dni-container {
+  margin-bottom: 20px;
+  border: 2px solid black;
+  padding: 10px;
+}
+
+input[type="text"] {
+  padding: 10px 25px;
+  text-align: center;
+  font-size: 18px;
+  width: 70%;
+}
+
+button {
+  margin-top: 10px;
+  background-color: #043d69;
+  color: white;
+  padding: 10px 25px;
+  font-weight: bold;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+}
+
+.resultado, .mensaje, .error {
+  margin-top: 20px;
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.mensaje {
+  color: green;
+}
+
+.error {
+  color: red;
+}
