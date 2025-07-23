@@ -91,7 +91,7 @@ if ($_SESSION['us_tipo'] != 1) {
       <div class="container">
         <div class="card">
           <div class="card-header text-center banner-titulo">
-            <h3 class="card-title">Registro exitoso</h3>
+            <h3 class="card-title">Datos de registro</h3>
           </div>
           <div class="card-body">
             <?php
