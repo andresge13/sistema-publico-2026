@@ -13,16 +13,18 @@ if ($_SESSION['us_tipo'] != 1) {
   include_once '../layouts/header.php';
   ?>
   <div class="text-center my-4">
-  <h1>Datos del Estudiante</h1>
+    <div class="col-md-2">
+          <img src="../../img/logo_uni.jpg" alt="UNHEVAL" class="logo-unheval">
+    </div>
   </div>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
   <style>
     .logo-biblioteca {
-      height: 70px;
+      height: 80px;
     }
     .logo-unheval {
-      height: 70px;
+      height: 90px;
     }
     .titulo-principal {
       font-size: 20px;
@@ -58,7 +60,7 @@ if ($_SESSION['us_tipo'] != 1) {
     <div class="container mb-4 registro-box">
       <div class="row align-items-center text-center">
         <div class="col-md-2">
-          <img src="../../assets/img/logo_biblioteca.png" alt="Biblioteca" class="logo-biblioteca">
+          <img src="../../img/inicio_biblio.png" alt="Biblioteca" class="logo-biblioteca">
         </div>
         <div class="col-md-8">
           <div class="titulo-principal">
@@ -66,7 +68,7 @@ if ($_SESSION['us_tipo'] != 1) {
           </div>
         </div>
         <div class="col-md-2">
-          <img src="../../assets/img/logo_unheval.png" alt="UNHEVAL" class="logo-unheval">
+          <img src="../../img/logoUnheval.png" alt="UNHEVAL" class="logo-unheval">
         </div>
       </div>
 
@@ -78,7 +80,7 @@ if ($_SESSION['us_tipo'] != 1) {
         <form method="GET" class="d-flex justify-content-center form-busqueda" id="formDni">
           <input type="text" class="form-control text-center" name="dni" id="dniInput" placeholder="Ingrese tu DNI" maxlength="8"
             value="<?php echo isset($_GET['dni']) ? htmlspecialchars($_GET['dni']) : ''; ?>" required>
-          <button class="btn btn-primary" type="submit">
+          <button class="btn btn-primary banner-titulo" type="submit">
             <i class="fas fa-search"></i> Registrar
           </button>
         </form>
@@ -88,8 +90,8 @@ if ($_SESSION['us_tipo'] != 1) {
     <section class="content">
       <div class="container">
         <div class="card">
-          <div class="card-header bg-primary text-white">
-            <h3 class="card-title">Datos del estudiante</h3>
+          <div class="card-header text-center banner-titulo">
+            <h3 class="card-title">Registro exitoso</h3>
           </div>
           <div class="card-body">
             <?php
@@ -181,7 +183,7 @@ if ($_SESSION['us_tipo'] != 1) {
 
                 echo '<div class="table-responsive">';
                 echo '<table class="table table-bordered table-hover mt-4">';
-                echo '<thead class="table-dark">
+                echo '<thead class="banner-titulo">
                         <tr>
                           <th>Apellidos</th>
                           <th>Nombres</th>
@@ -212,7 +214,7 @@ if ($_SESSION['us_tipo'] != 1) {
             ?>
           </div>
           <div class="card-footer">
-            Fecha y hora se guardan automáticamente.
+            Universidad Nacional Hermilio Valdizán | Biblioteca Central 'Javier Pulgar Vidal'
           </div>
         </div>
       </div>
