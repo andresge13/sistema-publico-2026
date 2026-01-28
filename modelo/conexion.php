@@ -11,14 +11,17 @@ class Conexion
 
     public function __construct()
     {
+        // Configurar Zona Horaria en PHP
+        date_default_timezone_set('America/Lima');
+
         $this->pdo = null;
         try {
             $dsn = "mysql:host=" . $this->host . ";dbname=" . $this->db_name;
             $options = [
                 PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, // Fetches results as associative arrays
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
                 PDO::ATTR_EMULATE_PREPARES   => false,
-                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8" // Ensures UTF-8 encoding
+                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8, time_zone = '-05:00'"
             ];
             $this->pdo = new PDO($dsn, $this->username, $this->password, $options);
         } catch (PDOException $e) {

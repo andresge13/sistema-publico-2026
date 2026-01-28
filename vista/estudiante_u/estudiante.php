@@ -66,7 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
         $diferencia = $datetime_ahora->getTimestamp() - $datetime_ultimo->getTimestamp();
 
         // BLOQUEO: Si pasaron menos de 30 segundos, no permitir nuevo registro
-        if ($diferencia < 30) {
+        // Se añade verificación de que la diferencia sea mayor o igual a 0 para evitar errores por cambio de hora
+        if ($diferencia < 30 && $diferencia >= 0) {
           $puede_registrar = false;
           $tipo_mensaje = 'warning';
           $falta = 30 - $diferencia;
@@ -253,7 +254,8 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     }
 
     #liveClock {
-      font-size: 5.5rem;
+      font-size: 4.2rem;
+      /* Reducido de 5.5rem */
       font-weight: 700;
       color: #fff;
       line-height: 1;
@@ -286,18 +288,30 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     }
 
     .header-text h1 {
-      font-size: 24px;
+      font-size: 20px;
+      /* Reducido de 24px */
       font-weight: 800;
       color: var(--primary-color);
       margin: 0;
+      text-transform: uppercase;
     }
 
-    .header-text p {
-      margin: 0;
-      color: var(--secondary-color);
+    .header-text h2 {
+      font-size: 16px;
+      /* Aumentado de 14px */
       font-weight: 700;
+      color: var(--text-color);
+      margin: 0;
+      display: inline-block;
+    }
+
+    .header-text .subtitle {
+      margin-left: 5px;
+      color: var(--secondary-color);
+      font-weight: 600;
       font-size: 14px;
-      letter-spacing: 2px;
+      /* Aumentado de 13px */
+      letter-spacing: 0.5px;
     }
 
     .register-card {
@@ -383,6 +397,111 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         opacity: 1;
       }
     }
+
+    /* ========== RESPONSIVIDAD ========== */
+    @media (max-width: 991.98px) {
+      #liveClock {
+        font-size: 4rem;
+      }
+
+      #liveDate {
+        font-size: 1.2rem;
+      }
+
+      .header-text h1 {
+        font-size: 20px;
+      }
+
+      .logo-img {
+        height: 55px;
+      }
+
+      .dni-input {
+        font-size: 32px;
+        letter-spacing: 6px;
+        max-width: 400px;
+      }
+    }
+
+    @media (max-width: 767.98px) {
+      .main-wrapper {
+        padding: 10px;
+      }
+
+      #liveClock {
+        font-size: 3rem;
+      }
+
+      #liveDate {
+        font-size: 1rem;
+        margin-bottom: 10px;
+      }
+
+      .uni-header {
+        padding: 10px 15px;
+        flex-direction: column;
+        text-align: center;
+      }
+
+      .logo-img {
+        height: 45px;
+        margin-bottom: 8px;
+      }
+
+      .header-text h1 {
+        font-size: 16px;
+      }
+
+      .header-text p {
+        font-size: 11px;
+      }
+
+      .register-card {
+        padding: 15px;
+      }
+
+      .instruction-text {
+        font-size: 14px;
+      }
+
+      .dni-input {
+        font-size: 24px;
+        letter-spacing: 4px;
+        padding: 10px;
+        max-width: 100%;
+      }
+
+      .user-feedback {
+        padding: 12px;
+      }
+
+      .success-badge {
+        font-size: 15px;
+      }
+
+      .user-name {
+        font-size: 18px;
+      }
+    }
+
+    @media (max-width: 575.98px) {
+      #liveClock {
+        font-size: 2.5rem;
+      }
+
+      .logo-img:first-child {
+        display: none;
+      }
+
+      .header-text h1 {
+        font-size: 14px;
+      }
+
+      .dni-input {
+        font-size: 20px;
+        letter-spacing: 3px;
+      }
+    }
   </style>
 </head>
 
@@ -396,9 +515,12 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       <header class="uni-header text-center">
         <img src="../../img/inicio_biblio.png" alt="Biblio" class="logo-img">
         <div class="header-text">
-          <div style="font-size: 11px; color: #718096; font-weight: 600;">Universidad Nacional Hermilio Valdizán</div>
-          <h1>BIBLIOTECA CENTRAL</h1>
-          <p>"Javier Pulgar Vidal"</p>
+          <div style="font-size: 15px; color: #718096; font-weight: 600;">Universidad Nacional Hermilio Valdizán</div>
+          <h1>SISTEMA DE CONTROL DE ASISTENCIA - UNHEVAL</h1>
+          <div class="mt-1">
+            <h2>BIBLIOTECA CENTRAL</h2>
+            <span class="subtitle">"Javier Pulgar Vidal"</span>
+          </div>
         </div>
         <img src="../../img/logo_uni.jpg" alt="UNHEVAL" class="logo-img">
       </header>
