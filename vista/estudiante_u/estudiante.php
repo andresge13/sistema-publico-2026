@@ -9,6 +9,103 @@ $pdo = $conexion->pdo;
 error_reporting(E_ALL & ~E_NOTICE);
 ini_set('display_errors', 0);
 
+// Leer configuración del sistema desde la base de datos
+$modo_kiosko = false;
+$config_sistema = [];
+try {
+  $stmt_config = $pdo->query("SELECT clave, valor FROM configuracion_sistema");
+  if ($stmt_config) {
+    while ($row = $stmt_config->fetch(PDO::FETCH_ASSOC)) {
+      $config_sistema[$row['clave']] = $row['valor'];
+    }
+    $modo_kiosko = ($config_sistema['modo_kiosko'] ?? '0') === '1';
+  }
+} catch (Exception $e) {
+  // Si la tabla no existe, usar valores por defecto
+}
+
+// ============================================
+// FUNCIONES DE VALIDACIÓN
+// ============================================
+
+/**
+ * Verifica si la biblioteca está dentro del horario de atención
+ */
+function verificarHorarioAtencion($config)
+{
+  if (($config['horario_atencion_activo'] ?? '0') !== '1') {
+    return ['permitido' => true, 'mensaje' => ''];
+  }
+
+  $dia_semana = date('w'); // 0=Dom, 1=Lun, 2=Mar, ... 6=Sab
+  $hora_actual = date('H:i');
+
+  // Domingo
+  if ($dia_semana == 0) {
+    if (($config['atencion_domingo'] ?? '0') !== '1') {
+      return [
+        'permitido' => false,
+        'mensaje' => $config['mensaje_fuera_horario'] ?? 'La biblioteca está cerrada los domingos.'
+      ];
+    }
+    return ['permitido' => true, 'mensaje' => ''];
+  }
+
+  // Sábado
+  if ($dia_semana == 6) {
+    $hora_apertura = $config['hora_apertura_sabado'] ?? '08:00';
+    $hora_cierre = $config['hora_cierre_sabado'] ?? '13:00';
+  } else {
+    // Lunes a Viernes
+    $hora_apertura = $config['hora_apertura_lun_vie'] ?? '07:00';
+    $hora_cierre = $config['hora_cierre_lun_vie'] ?? '20:30';
+  }
+
+  if ($hora_actual < $hora_apertura || $hora_actual > $hora_cierre) {
+    return [
+      'permitido' => false,
+      'mensaje' => $config['mensaje_fuera_horario'] ?? 'La biblioteca está cerrada en este momento.'
+    ];
+  }
+
+  return ['permitido' => true, 'mensaje' => ''];
+}
+
+/**
+ * Verifica si hay capacidad disponible en la biblioteca
+ */
+function verificarAforo($pdo, $config)
+{
+  if (($config['control_aforo_activo'] ?? '0') !== '1') {
+    return ['permitido' => true, 'mensaje' => '', 'aforo_actual' => 0];
+  }
+
+  $capacidad_maxima = intval($config['capacidad_biblioteca'] ?? 500);
+
+  // Calcular aforo actual
+  $sql = "SELECT 
+            (SELECT COUNT(*) FROM asistencias WHERE tipo_registro = 'Entrada' AND fecha = CURDATE()) -
+            (SELECT COUNT(*) FROM asistencias WHERE tipo_registro = 'Salida' AND fecha = CURDATE()) 
+          AS aforo_actual";
+  $stmt = $pdo->query($sql);
+  $resultado = $stmt->fetch(PDO::FETCH_ASSOC);
+  $aforo_actual = max(0, intval($resultado['aforo_actual']));
+
+  if ($aforo_actual >= $capacidad_maxima) {
+    return [
+      'permitido' => false,
+      'mensaje' => $config['mensaje_aforo_lleno'] ?? 'La biblioteca ha alcanzado su capacidad máxima.',
+      'aforo_actual' => $aforo_actual
+    ];
+  }
+
+  return ['permitido' => true, 'mensaje' => '', 'aforo_actual' => $aforo_actual];
+}
+
+// Variables para mostrar notificaciones en pantalla
+$notificacion_horario = verificarHorarioAtencion($config_sistema);
+$notificacion_aforo = verificarAforo($pdo, $config_sistema);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
   $dni_buscado = trim($_POST['dni']);
   $mensaje = '';
@@ -39,9 +136,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
                      VALUES (:id, :dni, 'Intento de acceso - Usuario bloqueado/sancionado', CURDATE(), CURTIME())";
       $stmt_alerta = $pdo->prepare($sql_alerta);
       $stmt_alerta->execute([':id' => $id_usuario, ':dni' => $dni_buscado]);
+
+      // ==================== VALIDAR HORARIO DE ATENCIÓN ====================
+    } elseif (!$notificacion_horario['permitido']) {
+      $tipo_mensaje = 'warning';
+      $mensaje = $notificacion_horario['mensaje'];
+
+      // ==================== VALIDAR AFORO DISPONIBLE (solo para entradas) ====================
+    } elseif (!$notificacion_aforo['permitido']) {
+      // Verificar si el usuario va a marcar entrada o salida
+      $sql_check = "SELECT tipo_registro FROM asistencias WHERE id_usuario = :id ORDER BY id_asistencia DESC LIMIT 1";
+      $stmt_check = $pdo->prepare($sql_check);
+      $stmt_check->execute([':id' => $id_usuario]);
+      $ultimo_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
+
+      // Solo bloquear si es una ENTRADA (salidas siempre permitidas)
+      if (!$ultimo_check || $ultimo_check['tipo_registro'] == 'Salida') {
+        $tipo_mensaje = 'warning';
+        $mensaje = $notificacion_aforo['mensaje'];
+      } else {
+        // Es una salida, continuar normalmente
+        goto procesar_asistencia;
+      }
     } else {
+      procesar_asistencia:
       // =====================================================
       // LÓGICA DE REGISTRO DE ASISTENCIA (ENTRADA/SALIDA)
+      // CON MANEJO INTELIGENTE DE OLVIDO DE SALIDA
       // =====================================================
 
       // Obtener el último registro de asistencia de este usuario
@@ -59,26 +180,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
       $puede_registrar = true;
       $tipo_registro = 'Entrada'; // Por defecto es Entrada
 
+      // Constantes de configuración
+      $HORA_CIERRE_AUTOMATICO = '20:30:00'; // 8:30 PM - cierre automático de sesiones
+      $TIEMPO_MAXIMO_SESION_HORAS = 4; // 4 horas máximo de sesión activa
+
       if ($ultimo) {
         // Calcular segundos desde el último registro
         $datetime_ultimo = new DateTime($ultimo['fecha'] . ' ' . $ultimo['hora']);
         $datetime_ahora = new DateTime();
-        $diferencia = $datetime_ahora->getTimestamp() - $datetime_ultimo->getTimestamp();
+        $diferencia_seg = $datetime_ahora->getTimestamp() - $datetime_ultimo->getTimestamp();
+        $diferencia_horas = $diferencia_seg / 3600;
 
-        // BLOQUEO: Si pasaron menos de 30 segundos, no permitir nuevo registro
-        // Se añade verificación de que la diferencia sea mayor o igual a 0 para evitar errores por cambio de hora
-        if ($diferencia < 30 && $diferencia >= 0) {
+        // BLOQUEO ANTI-SPAM: Si pasaron menos de 30 segundos, no permitir nuevo registro
+        if ($diferencia_seg < 30 && $diferencia_seg >= 0) {
           $puede_registrar = false;
           $tipo_mensaje = 'warning';
-          $falta = 30 - $diferencia;
+          $falta = 30 - $diferencia_seg;
           $mensaje = "Ya registraste tu asistencia. Espera {$falta} segundos.";
         } else {
-          // ALTERNANCIA: Determinar si es Entrada o Salida
-          // Si el último fue Entrada -> ahora es Salida
-          // Si el último fue Salida -> ahora es Entrada
-          if ($ultimo['tipo_registro'] == 'Entrada') {
-            $tipo_registro = 'Salida';
+          // ===== LÓGICA DE DETERMINACIÓN ENTRADA/SALIDA =====
+
+          $es_mismo_dia = ($ultimo['fecha'] == $fecha_hoy);
+          $ultimo_fue_entrada = ($ultimo['tipo_registro'] == 'Entrada');
+
+          if ($ultimo_fue_entrada) {
+            // El último registro fue ENTRADA
+
+            if (!$es_mismo_dia) {
+              // CASO 1: Entrada de día anterior → El usuario olvidó marcar salida ayer
+              // Permitir nueva ENTRADA (el sistema asume que ya salió y no marcó)
+              $tipo_registro = 'Entrada';
+            } elseif ($ultimo['hora'] < $HORA_CIERRE_AUTOMATICO && date('H:i:s') >= $HORA_CIERRE_AUTOMATICO) {
+              // CASO 2: Entrada del mismo día pero ya pasó la hora de cierre (8:30 PM)
+              // Si entró antes de las 8:30 y ahora son después de las 8:30, permitir nueva entrada
+              $tipo_registro = 'Entrada';
+            } elseif ($diferencia_horas >= $TIEMPO_MAXIMO_SESION_HORAS) {
+              // CASO 3: Entrada del mismo día pero más de 4 horas atrás
+              // El usuario probablemente olvidó marcar salida y vuelve a entrar
+              $tipo_registro = 'Entrada';
+            } else {
+              // CASO NORMAL: Entrada reciente del mismo día → Espera SALIDA
+              $tipo_registro = 'Salida';
+            }
           } else {
+            // El último registro fue SALIDA → Ahora toca ENTRADA
             $tipo_registro = 'Entrada';
           }
         }
@@ -525,6 +670,25 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         <img src="../../img/logo_uni.jpg" alt="UNHEVAL" class="logo-img">
       </header>
 
+      <?php if (!$notificacion_horario['permitido']): ?>
+        <!-- Banner de Biblioteca Cerrada -->
+        <div style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(229, 62, 62, 0.4);">
+          <i class="fas fa-clock fa-2x" style="margin-bottom: 10px;"></i>
+          <h3 style="margin: 0; font-weight: 700;">BIBLIOTECA CERRADA</h3>
+          <p style="margin: 10px 0 0 0; opacity: 0.9;"><?= htmlspecialchars($notificacion_horario['mensaje']) ?></p>
+        </div>
+      <?php endif; ?>
+
+      <?php if ($notificacion_horario['permitido'] && !$notificacion_aforo['permitido']): ?>
+        <!-- Banner de Aforo Lleno -->
+        <div style="background: linear-gradient(135deg, #dd6b20 0%, #c05621 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(221, 107, 32, 0.4);">
+          <i class="fas fa-users-slash fa-2x" style="margin-bottom: 10px;"></i>
+          <h3 style="margin: 0; font-weight: 700;">AFORO COMPLETO</h3>
+          <p style="margin: 10px 0 0 0; opacity: 0.9;"><?= htmlspecialchars($notificacion_aforo['mensaje']) ?></p>
+          <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.8;">Si ya te encuentras dentro, puedes marcar tu salida normalmente.</p>
+        </div>
+      <?php endif; ?>
+
       <main class="register-card">
         <div class="instruction-text">
           <i class="fas fa-barcode me-2"></i> PASE SU CARNET O INGRESE SU DNI
@@ -592,6 +756,62 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         timer: 5000,
         timerProgressBar: true
       });
+    <?php endif; ?>
+
+    <?php if ($modo_kiosko): ?>
+      // === MODO KIOSKO ===
+      // Pantalla completa automática
+      function enterFullscreen() {
+        const elem = document.documentElement;
+        if (elem.requestFullscreen) {
+          elem.requestFullscreen();
+        } else if (elem.webkitRequestFullscreen) {
+          elem.webkitRequestFullscreen();
+        } else if (elem.msRequestFullscreen) {
+          elem.msRequestFullscreen();
+        }
+      }
+
+      // Intentar entrar en pantalla completa al cargar
+      document.addEventListener('click', function activateFullscreen() {
+        enterFullscreen();
+        document.removeEventListener('click', activateFullscreen);
+      }, {
+        once: true
+      });
+
+      // Bloquear teclas de navegación
+      document.addEventListener('keydown', function(e) {
+        // Bloquear F5, F11, Ctrl+R, Ctrl+W, Alt+F4
+        if (e.key === 'F5' || e.key === 'F11' ||
+          (e.ctrlKey && (e.key === 'r' || e.key === 'w')) ||
+          (e.altKey && e.key === 'F4')) {
+          e.preventDefault();
+          return false;
+        }
+        // Bloquear Escape
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          enterFullscreen();
+          return false;
+        }
+      });
+
+      // Bloquear clic derecho
+      document.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+        return false;
+      });
+
+      // Re-entrar a pantalla completa si se sale
+      document.addEventListener('fullscreenchange', function() {
+        if (!document.fullscreenElement) {
+          setTimeout(enterFullscreen, 100);
+        }
+      });
+
+      // Mostrar indicador de modo kiosko
+      console.log('%c🔒 MODO KIOSKO ACTIVO', 'background: #0c2340; color: #c5a059; font-size: 16px; padding: 10px;');
     <?php endif; ?>
   </script>
 </body>
