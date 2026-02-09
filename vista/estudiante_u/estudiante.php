@@ -667,7 +667,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
             <span class="subtitle">"Javier Pulgar Vidal"</span>
           </div>
         </div>
-        <img src="../../img/logo_uni.jpg" alt="UNHEVAL" class="logo-img">
+        <img src="../../img/unheval - copia.png" alt="UNHEVAL" class="logo-img">
       </header>
 
       <?php if (!$notificacion_horario['permitido']): ?>
@@ -738,6 +738,38 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
     const input = document.getElementById('dniInput');
     const form = document.getElementById('formAsistencia');
+
+    // === SISTEMA DE AUTO-ENFOQUE PERMANENTE ===
+    // Mantener el input siempre enfocado para escaneo de carnet
+    function mantenerEnfoque() {
+      if (document.activeElement !== input) {
+        input.focus();
+      }
+    }
+
+    // Re-enfocar inmediatamente cuando pierde el foco
+    input.addEventListener('blur', function() {
+      setTimeout(mantenerEnfoque, 50);
+    });
+
+    // Enfocar al hacer clic en cualquier parte de la página
+    document.addEventListener('click', function(e) {
+      if (e.target !== input) {
+        setTimeout(mantenerEnfoque, 50);
+      }
+    });
+
+    // Enfocar al tocar la pantalla (para tablets/kioscos táctiles)
+    document.addEventListener('touchstart', function() {
+      setTimeout(mantenerEnfoque, 50);
+    });
+
+    // Verificar enfoque cada 2 segundos como respaldo
+    setInterval(mantenerEnfoque, 2000);
+
+    // Enfoque inicial
+    mantenerEnfoque();
+
     input.addEventListener('input', function() {
       this.value = this.value.replace(/[^0-9]/g, '');
       if (this.value.length === 8) {
