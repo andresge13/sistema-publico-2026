@@ -268,7 +268,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
       try {
         $pdo->beginTransaction();
 
-        // Insertar usuario
+        // Insertar usuario (SOLO registrar, NO marcar asistencia)
         $sql = "INSERT INTO usuarios (nombres, apellidos, dni, genero, id_tipo_usuario, id_estado, fecha_registro, fecha_fin_registro, usuario_creacion)
                 VALUES (:nombres, :apellidos, :dni, 'M', 1, 1, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 6 MONTH), 'SISTEMA_PUBLICO')";
         $stmt = $pdo->prepare($sql);
@@ -292,19 +292,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
           ':anio' => $datos['anio_estudio'] ?? ''
         ]);
 
-        // Registrar entrada
-        $sql = "INSERT INTO asistencias (id_usuario, tipo_registro, fecha, hora, metodo_registro)
-                VALUES (:id_usuario, 'Entrada', CURDATE(), CURTIME(), 'SISTEMA_PUBLICO')";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([':id_usuario' => $id_usuario]);
+        // NO registrar asistencia automáticamente al crear el usuario
+        // El estudiante debe pasar su carnet nuevamente para registrar su primera entrada
 
         $pdo->commit();
 
         $tipo_mensaje = 'success';
-        $mensaje = '¡Bienvenido! Te hemos registrado en el sistema.';
+        $mensaje = '¡Te hemos registrado en el sistema! Pasa tu DNI nuevamente para marcar tu entrada.';
         $datos_usuario = [
           'nombre_completo' => $datos['Paterno'] . ' ' . $datos['Materno'] . ', ' . $datos['Nombres'],
-          'tipo_registro' => 'Entrada',
+          'tipo_registro' => 'Registro',
           'fecha_hora' => date('d/m/Y H:i:s')
         ];
       } catch (PDOException $e) {
@@ -406,6 +403,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       line-height: 1;
       text-shadow: 0 5px 15px rgba(0, 0, 0, 0.7);
       text-align: center;
+      margin-top: 20px;
     }
 
     #liveDate {
@@ -499,8 +497,8 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     .user-feedback {
       margin-top: 20px;
       padding: 18px;
-      background: rgba(56, 161, 105, 0.1);
-      border: 2px solid #38a169;
+      background: rgba(16, 185, 129, 0.1);
+      border: 2px solid #10B981;
       border-radius: 16px;
       animation: zoomIn 0.3s ease-out;
     }
@@ -511,7 +509,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     }
 
     .success-badge {
-      color: #38a169;
+      color: #10B981;
       font-weight: 800;
       font-size: 18px;
       text-transform: uppercase;
@@ -672,7 +670,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
       <?php if (!$notificacion_horario['permitido']): ?>
         <!-- Banner de Biblioteca Cerrada -->
-        <div style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(229, 62, 62, 0.4);">
+        <div style="background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(239, 68, 68, 0.4);">
           <i class="fas fa-clock fa-2x" style="margin-bottom: 10px;"></i>
           <h3 style="margin: 0; font-weight: 700;">BIBLIOTECA CERRADA</h3>
           <p style="margin: 10px 0 0 0; opacity: 0.9;"><?= htmlspecialchars($notificacion_horario['mensaje']) ?></p>
@@ -681,7 +679,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
       <?php if ($notificacion_horario['permitido'] && !$notificacion_aforo['permitido']): ?>
         <!-- Banner de Aforo Lleno -->
-        <div style="background: linear-gradient(135deg, #dd6b20 0%, #c05621 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(221, 107, 32, 0.4);">
+        <div style="background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(245, 158, 11, 0.4);">
           <i class="fas fa-users-slash fa-2x" style="margin-bottom: 10px;"></i>
           <h3 style="margin: 0; font-weight: 700;">AFORO COMPLETO</h3>
           <p style="margin: 10px 0 0 0; opacity: 0.9;"><?= htmlspecialchars($notificacion_aforo['mensaje']) ?></p>
@@ -701,12 +699,21 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         <?php if ($datos_usuario): ?>
           <div class="user-feedback <?= $tipo_mensaje === 'error' ? 'error' : '' ?>">
             <div class="success-badge">
-              <i class="fas fa-<?= $tipo_mensaje === 'success' ? 'check-circle' : 'exclamation-circle' ?>"></i>
-              <?= $datos_usuario['tipo_registro'] === 'Entrada' ? 'BIENVENIDO' : 'HASTA PRONTO' ?>
+              <i class="fas fa-<?= $tipo_mensaje === 'success' ? 'check-circle' : ($datos_usuario['tipo_registro'] === 'Registro' ? 'user-plus' : 'exclamation-circle') ?>"></i>
+              <?php
+              if ($datos_usuario['tipo_registro'] === 'Entrada') echo 'BIENVENIDO';
+              elseif ($datos_usuario['tipo_registro'] === 'Salida') echo 'HASTA PRONTO';
+              elseif ($datos_usuario['tipo_registro'] === 'Registro') echo 'REGISTRADO';
+              else echo 'AVISO';
+              ?>
             </div>
             <div class="user-name"><?= htmlspecialchars($datos_usuario['nombre_completo']) ?></div>
             <div style="font-size: 14px; opacity: 0.8; margin-top: 5px;">
-              <strong><?= $datos_usuario['tipo_registro'] ?></strong> registrada a las <?= $datos_usuario['fecha_hora'] ?>
+              <?php if ($datos_usuario['tipo_registro'] === 'Registro'): ?>
+                <strong>Registrado en el sistema</strong> — Pasa tu DNI nuevamente para marcar tu entrada
+              <?php else: ?>
+                <strong><?= $datos_usuario['tipo_registro'] ?></strong> registrada a las <?= $datos_usuario['fecha_hora'] ?>
+              <?php endif; ?>
             </div>
           </div>
         <?php endif; ?>
@@ -785,9 +792,21 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         background: '#fff',
         color: '#2d3748',
         confirmButtonColor: '#0c2340',
-        timer: 5000,
+        timer: 2000,
         timerProgressBar: true
       });
+    <?php endif; ?>
+
+    // Auto-ocultar datos del usuario después de 4 segundos
+    <?php if ($datos_usuario): ?>
+      setTimeout(function() {
+        var feedback = document.querySelector('.user-feedback');
+        if (feedback) {
+          feedback.style.transition = 'opacity 0.5s ease, max-height 0.5s ease';
+          feedback.style.opacity = '0';
+          setTimeout(function() { feedback.style.display = 'none'; }, 500);
+        }
+      }, 4000);
     <?php endif; ?>
 
     <?php if ($modo_kiosko): ?>
