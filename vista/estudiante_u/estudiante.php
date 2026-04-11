@@ -199,32 +199,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
           $mensaje = "Ya registraste tu asistencia. Espera {$falta} segundos.";
         } else {
           // ===== LÓGICA DE DETERMINACIÓN ENTRADA/SALIDA =====
-
-          $es_mismo_dia = ($ultimo['fecha'] == $fecha_hoy);
-          $ultimo_fue_entrada = ($ultimo['tipo_registro'] == 'Entrada');
-
-          if ($ultimo_fue_entrada) {
-            // El último registro fue ENTRADA
-
-            if (!$es_mismo_dia) {
-              // CASO 1: Entrada de día anterior → El usuario olvidó marcar salida ayer
-              // Permitir nueva ENTRADA (el sistema asume que ya salió y no marcó)
-              $tipo_registro = 'Entrada';
-            } elseif ($ultimo['hora'] < $HORA_CIERRE_AUTOMATICO && date('H:i:s') >= $HORA_CIERRE_AUTOMATICO) {
-              // CASO 2: Entrada del mismo día pero ya pasó la hora de cierre (8:30 PM)
-              // Si entró antes de las 8:30 y ahora son después de las 8:30, permitir nueva entrada
-              $tipo_registro = 'Entrada';
-            } elseif ($diferencia_horas >= $TIEMPO_MAXIMO_SESION_HORAS) {
-              // CASO 3: Entrada del mismo día pero más de 4 horas atrás
-              // El usuario probablemente olvidó marcar salida y vuelve a entrar
-              $tipo_registro = 'Entrada';
-            } else {
-              // CASO NORMAL: Entrada reciente del mismo día → Espera SALIDA
-              $tipo_registro = 'Salida';
-            }
-          } else {
-            // El último registro fue SALIDA → Ahora toca ENTRADA
+          
+          // Punto clave: Verificar si el modo salida está activado en configuración
+          if (($config_sistema['asistencia_modo_salida'] ?? '1') === '0') {
+            // MODO SOLO INGRESO ACTIVADO: Siempre será entrada
             $tipo_registro = 'Entrada';
+          } else {
+            // MODO NORMAL: Alternar entre Entrada y Salida
+            $es_mismo_dia = ($ultimo['fecha'] == $fecha_hoy);
+            $ultimo_fue_entrada = ($ultimo['tipo_registro'] == 'Entrada');
+
+            if ($ultimo_fue_entrada) {
+              // El último registro fue ENTRADA
+
+              if (!$es_mismo_dia) {
+                // CASO 1: Entrada de día anterior → El usuario olvidó marcar salida ayer
+                // Permitir nueva ENTRADA (el sistema asume que ya salió y no marcó)
+                $tipo_registro = 'Entrada';
+              } elseif ($ultimo['hora'] < $HORA_CIERRE_AUTOMATICO && date('H:i:s') >= $HORA_CIERRE_AUTOMATICO) {
+                // CASO 2: Entrada del mismo día pero ya pasó la hora de cierre (8:30 PM)
+                // Si entró antes de las 8:30 y ahora son después de las 8:30, permitir nueva entrada
+                $tipo_registro = 'Entrada';
+              } elseif ($diferencia_horas >= $TIEMPO_MAXIMO_SESION_HORAS) {
+                // CASO 3: Entrada del mismo día pero más de 4 horas atrás
+                // El usuario probablemente olvidó marcar salida y vuelve a entrar
+                $tipo_registro = 'Entrada';
+              } else {
+                // CASO NORMAL: Entrada reciente del mismo día → Espera SALIDA
+                $tipo_registro = 'Salida';
+              }
+            } else {
+              // El último registro fue SALIDA → Ahora toca ENTRADA
+              $tipo_registro = 'Entrada';
+            }
           }
         }
       }
