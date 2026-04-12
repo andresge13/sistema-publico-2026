@@ -113,9 +113,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
   $datos_usuario = null;
 
   // Buscar usuario en la base de datos
-  $sql_usuario = "SELECT u.*, eu.escuela, ue.institucion_procedencia
+  $sql_usuario = "SELECT u.*, esc.nombre_escuela AS escuela, ue.institucion_procedencia
                     FROM usuarios u
                     LEFT JOIN estudiantes_unheval eu ON u.id_usuario = eu.id_usuario
+                    LEFT JOIN escuelas esc ON eu.id_escuela = esc.id_escuela
                     LEFT JOIN usuarios_externos ue ON u.id_usuario = ue.id_usuario
                     WHERE u.dni = :dni";
 
@@ -286,15 +287,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
         ]);
         $id_usuario = $pdo->lastInsertId();
 
-        // Insertar datos de estudiante
-        $sql = "INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, facultad, escuela, nivel_academico, anio_estudio)
-                VALUES (:id_usuario, :codigo, :facultad, :escuela, :nivel, :anio)";
+        // 1. Obtener o crear ID de Facultad
+        $stmt_f = $pdo->prepare("SELECT id_facultad FROM facultades WHERE nombre_facultad = ?");
+        $stmt_f->execute([$datos['Facultad']]);
+        $id_facultad = $stmt_f->fetchColumn();
+        if (!$id_facultad && !empty($datos['Facultad'])) {
+          $stmt_fi = $pdo->prepare("INSERT INTO facultades (nombre_facultad) VALUES (?)");
+          $stmt_fi->execute([$datos['Facultad']]);
+          $id_facultad = $pdo->lastInsertId();
+        }
+
+        // 2. Obtener o crear ID de Escuela
+        $stmt_e = $pdo->prepare("SELECT id_escuela FROM escuelas WHERE nombre_escuela = ? AND id_facultad = ?");
+        $stmt_e->execute([$datos['Escuela'], $id_facultad]);
+        $id_escuela = $stmt_e->fetchColumn();
+        if (!$id_escuela && !empty($datos['Escuela']) && $id_facultad) {
+          $stmt_ei = $pdo->prepare("INSERT INTO escuelas (id_facultad, nombre_escuela) VALUES (?, ?)");
+          $stmt_ei->execute([$id_facultad, $datos['Escuela']]);
+          $id_escuela = $pdo->lastInsertId();
+        }
+
+        // 3. Insertar datos de estudiante
+        $sql = "INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, id_facultad, id_escuela, nivel_academico, anio_estudio)
+                VALUES (:id_usuario, :codigo, :id_facultad, :id_escuela, :nivel, :anio)";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
           ':id_usuario' => $id_usuario,
           ':codigo' => $datos['Codigo'] ?? '',
-          ':facultad' => $datos['Facultad'],
-          ':escuela' => $datos['Escuela'],
+          ':id_facultad' => $id_facultad,
+          ':id_escuela' => $id_escuela,
           ':nivel' => $datos['Niv_Acad'],
           ':anio' => $datos['anio_estudio'] ?? ''
         ]);
