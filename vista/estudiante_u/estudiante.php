@@ -277,8 +277,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
         $pdo->beginTransaction();
 
         // Insertar usuario (SOLO registrar, NO marcar asistencia)
+        // Se establece por defecto el 30 de diciembre del año actual para estudiantes UNHEVAL
         $sql = "INSERT INTO usuarios (nombres, apellidos, dni, genero, id_tipo_usuario, id_estado, fecha_registro, fecha_fin_registro, usuario_creacion)
-                VALUES (:nombres, :apellidos, :dni, 'M', 1, 1, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 6 MONTH), 'SISTEMA_PUBLICO')";
+                VALUES (:nombres, :apellidos, :dni, 'M', 1, 1, CURDATE(), CONCAT(YEAR(CURDATE()), '-12-30'), 'SISTEMA_PUBLICO')";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([
           ':nombres' => $datos['Nombres'],
