@@ -1,7 +1,6 @@
 <?php
 session_start();
 include_once '../../modelo/conexion.php';
-include_once(__DIR__ . '/../../api/datos_estudiantes.php');
 
 $conexion = new Conexion();
 $pdo = $conexion->pdo;
@@ -9,7 +8,7 @@ $pdo = $conexion->pdo;
 error_reporting(E_ALL & ~E_NOTICE);
 ini_set('display_errors', 0);
 
-// Leer configuración del sistema desde la base de datos
+// Leer configuración del sistema para validar estado inicial (banners)
 $modo_kiosko = false;
 $config_sistema = [];
 try {
@@ -20,300 +19,41 @@ try {
     }
     $modo_kiosko = ($config_sistema['modo_kiosko'] ?? '0') === '1';
   }
-} catch (Exception $e) {
-  // Si la tabla no existe, usar valores por defecto
-}
+} catch (Exception $e) {}
 
-// ============================================
-// FUNCIONES DE VALIDACIÓN
-// ============================================
-
-/**
- * Verifica si la biblioteca está dentro del horario de atención
- */
-function verificarHorarioAtencion($config)
-{
-  if (($config['horario_atencion_activo'] ?? '0') !== '1') {
-    return ['permitido' => true, 'mensaje' => ''];
-  }
-
-  $dia_semana = date('w'); // 0=Dom, 1=Lun, 2=Mar, ... 6=Sab
+// Funciones mínimas para banners iniciales
+function verificarHorarioAtencion($config) {
+  if (($config['horario_atencion_activo'] ?? '0') !== '1') return ['permitido' => true];
+  $dia_semana = date('w');
   $hora_actual = date('H:i');
-
-  // Domingo
-  if ($dia_semana == 0) {
-    if (($config['atencion_domingo'] ?? '0') !== '1') {
-      return [
-        'permitido' => false,
-        'mensaje' => $config['mensaje_fuera_horario'] ?? 'La biblioteca está cerrada los domingos.'
-      ];
-    }
-    return ['permitido' => true, 'mensaje' => ''];
+  if ($dia_semana == 0 && ($config['atencion_domingo'] ?? '0') !== '1') {
+      return ['permitido' => false, 'mensaje' => $config['mensaje_fuera_horario'] ?? 'Cerrado domingos'];
   }
-
-  // Sábado
   if ($dia_semana == 6) {
-    $hora_apertura = $config['hora_apertura_sabado'] ?? '08:00';
-    $hora_cierre = $config['hora_cierre_sabado'] ?? '13:00';
+    $h_ap = $config['hora_apertura_sabado'] ?? '08:00';
+    $h_ci = $config['hora_cierre_sabado'] ?? '13:00';
   } else {
-    // Lunes a Viernes
-    $hora_apertura = $config['hora_apertura_lun_vie'] ?? '07:00';
-    $hora_cierre = $config['hora_cierre_lun_vie'] ?? '20:30';
+    $h_ap = $config['hora_apertura_lun_vie'] ?? '07:00';
+    $h_ci = $config['hora_cierre_lun_vie'] ?? '20:30';
   }
-
-  if ($hora_actual < $hora_apertura || $hora_actual > $hora_cierre) {
-    return [
-      'permitido' => false,
-      'mensaje' => $config['mensaje_fuera_horario'] ?? 'La biblioteca está cerrada en este momento.'
-    ];
-  }
-
-  return ['permitido' => true, 'mensaje' => ''];
+  if ($hora_actual < $h_ap || $hora_actual > $h_ci) return ['permitido' => false, 'mensaje' => $config['mensaje_fuera_horario'] ?? 'Cerrado'];
+  return ['permitido' => true];
 }
 
-/**
- * Verifica si hay capacidad disponible en la biblioteca
- */
-function verificarAforo($pdo, $config)
-{
-  if (($config['control_aforo_activo'] ?? '0') !== '1') {
-    return ['permitido' => true, 'mensaje' => '', 'aforo_actual' => 0];
-  }
-
-  $capacidad_maxima = intval($config['capacidad_biblioteca'] ?? 500);
-
-  // Calcular aforo actual
-  $sql = "SELECT 
-            (SELECT COUNT(*) FROM asistencias WHERE tipo_registro = 'Entrada' AND fecha = CURDATE()) -
-            (SELECT COUNT(*) FROM asistencias WHERE tipo_registro = 'Salida' AND fecha = CURDATE()) 
-          AS aforo_actual";
+function verificarAforo($pdo, $config) {
+  if (($config['control_aforo_activo'] ?? '0') !== '1') return ['permitido' => true];
+  $cap_max = intval($config['capacidad_biblioteca'] ?? 500);
+  $sql = "SELECT (SELECT COUNT(*) FROM asistencias WHERE tipo_registro = 'Entrada' AND fecha = CURDATE()) -
+                 (SELECT COUNT(*) FROM asistencias WHERE tipo_registro = 'Salida' AND fecha = CURDATE()) AS aforo";
   $stmt = $pdo->query($sql);
-  $resultado = $stmt->fetch(PDO::FETCH_ASSOC);
-  $aforo_actual = max(0, intval($resultado['aforo_actual']));
-
-  if ($aforo_actual >= $capacidad_maxima) {
-    return [
-      'permitido' => false,
-      'mensaje' => $config['mensaje_aforo_lleno'] ?? 'La biblioteca ha alcanzado su capacidad máxima.',
-      'aforo_actual' => $aforo_actual
-    ];
-  }
-
-  return ['permitido' => true, 'mensaje' => '', 'aforo_actual' => $aforo_actual];
+  $res = $stmt->fetch(PDO::FETCH_ASSOC);
+  $a=$res?$res['aforo']:0;
+  if ($a >= $cap_max) return ['permitido' => false, 'mensaje' => $config['mensaje_aforo_lleno'] ?? 'Aforo completo'];
+  return ['permitido' => true];
 }
 
-// Variables para mostrar notificaciones en pantalla
 $notificacion_horario = verificarHorarioAtencion($config_sistema);
 $notificacion_aforo = verificarAforo($pdo, $config_sistema);
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
-  $dni_buscado = trim($_POST['dni']);
-  $mensaje = '';
-  $tipo_mensaje = '';
-  $datos_usuario = null;
-
-  // Buscar usuario en la base de datos
-  $sql_usuario = "SELECT u.*, esc.nombre_escuela AS escuela, ue.institucion_procedencia
-                    FROM usuarios u
-                    LEFT JOIN estudiantes_unheval eu ON u.id_usuario = eu.id_usuario
-                    LEFT JOIN escuelas esc ON eu.id_escuela = esc.id_escuela
-                    LEFT JOIN usuarios_externos ue ON u.id_usuario = ue.id_usuario
-                    WHERE u.dni = :dni";
-
-  $stmt = $pdo->prepare($sql_usuario);
-  $stmt->execute([':dni' => $dni_buscado]);
-  $usuario_bd = $stmt->fetch(PDO::FETCH_ASSOC);
-
-  if ($usuario_bd) {
-    $id_usuario = $usuario_bd['id_usuario'];
-
-    if ($usuario_bd['id_estado'] != 1) {
-      $tipo_mensaje = 'error';
-      $mensaje = 'TU CUENTA ESTÁ BLOQUEADA. Por favor, acércate a la oficina de administración de la biblioteca.';
-
-      $sql_alerta = "INSERT INTO alertas_asistencia (id_usuario, dni, mensaje, fecha, hora) 
-                     VALUES (:id, :dni, 'Intento de acceso - Usuario bloqueado/sancionado', CURDATE(), CURTIME())";
-      $stmt_alerta = $pdo->prepare($sql_alerta);
-      $stmt_alerta->execute([':id' => $id_usuario, ':dni' => $dni_buscado]);
-
-    } elseif (!$notificacion_horario['permitido']) {
-      $tipo_mensaje = 'warning';
-      $mensaje = $notificacion_horario['mensaje'];
-
-    } elseif (!$notificacion_aforo['permitido']) {
-      $sql_check = "SELECT tipo_registro FROM asistencias WHERE id_usuario = :id ORDER BY id_asistencia DESC LIMIT 1";
-      $stmt_check = $pdo->prepare($sql_check);
-      $stmt_check->execute([':id' => $id_usuario]);
-      $ultimo_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
-
-      if (!$ultimo_check || $ultimo_check['tipo_registro'] == 'Salida') {
-        $tipo_mensaje = 'warning';
-        $mensaje = $notificacion_aforo['mensaje'];
-      } else {
-        goto procesar_asistencia;
-      }
-    } else {
-      procesar_asistencia:
-      $sql_ultimo = "SELECT id_asistencia, tipo_registro, fecha, hora
-                     FROM asistencias 
-                     WHERE id_usuario = :id_usuario 
-                     ORDER BY id_asistencia DESC 
-                     LIMIT 1";
-      $stmt_ultimo = $pdo->prepare($sql_ultimo);
-      $stmt_ultimo->execute([':id_usuario' => $id_usuario]);
-      $ultimo = $stmt_ultimo->fetch(PDO::FETCH_ASSOC);
-
-      $fecha_hoy = date('Y-m-d');
-      $hora_actual = date('H:i:s');
-      $puede_registrar = true;
-      $tipo_registro = 'Entrada';
-
-      $HORA_CIERRE_AUTOMATICO = '20:30:00';
-      $TIEMPO_MAXIMO_SESION_HORAS = 4;
-
-      if ($ultimo) {
-        $datetime_ultimo = new DateTime($ultimo['fecha'] . ' ' . $ultimo['hora']);
-        $datetime_ahora = new DateTime();
-        $diferencia_seg = $datetime_ahora->getTimestamp() - $datetime_ultimo->getTimestamp();
-        $diferencia_horas = $diferencia_seg / 3600;
-
-        if ($diferencia_seg < 30 && $diferencia_seg >= 0) {
-          $puede_registrar = false;
-          $tipo_mensaje = 'warning';
-          $falta = 30 - $diferencia_seg;
-          $mensaje = "Ya registraste tu asistencia. Espera {$falta} segundos.";
-        } else {
-          if (($config_sistema['asistencia_modo_salida'] ?? '1') === '0') {
-            $tipo_registro = 'Entrada';
-          } else {
-            $es_mismo_dia = ($ultimo['fecha'] == $fecha_hoy);
-            $ultimo_fue_entrada = ($ultimo['tipo_registro'] == 'Entrada');
-
-            if ($ultimo_fue_entrada) {
-              if (!$es_mismo_dia) {
-                $tipo_registro = 'Entrada';
-              } elseif ($ultimo['hora'] < $HORA_CIERRE_AUTOMATICO && date('H:i:s') >= $HORA_CIERRE_AUTOMATICO) {
-                $tipo_registro = 'Entrada';
-              } elseif ($diferencia_horas >= $TIEMPO_MAXIMO_SESION_HORAS) {
-                $tipo_registro = 'Entrada';
-              } else {
-                $tipo_registro = 'Salida';
-              }
-            } else {
-              $tipo_registro = 'Entrada';
-            }
-          }
-        }
-      }
-
-      if ($puede_registrar) {
-        try {
-          $sql_insert = "INSERT INTO asistencias (id_usuario, tipo_registro, fecha, hora, metodo_registro)
-                         VALUES (:id_usuario, :tipo_registro, :fecha, :hora, 'SISTEMA_PUBLICO')";
-          $stmt_insert = $pdo->prepare($sql_insert);
-          $stmt_insert->execute([
-            ':id_usuario' => $id_usuario,
-            ':tipo_registro' => $tipo_registro,
-            ':fecha' => $fecha_hoy,
-            ':hora' => $hora_actual
-          ]);
-
-          $tipo_mensaje = 'success';
-          if ($tipo_registro === 'Entrada') {
-            $mensaje = '¡Bienvenido a la Biblioteca!';
-          } else {
-            $mensaje = '¡Hasta pronto! Gracias por tu visita.';
-          }
-
-          $datos_usuario = [
-            'nombre_completo' => $usuario_bd['apellidos'] . ', ' . $usuario_bd['nombres'],
-            'tipo_registro' => $tipo_registro,
-            'fecha_hora' => date('d/m/Y H:i:s')
-          ];
-        } catch (PDOException $e) {
-          $tipo_mensaje = 'error';
-          $mensaje = 'Error al registrar asistencia: ' . $e->getMessage();
-        }
-      }
-    }
-  } else {
-    $respuesta = obtenerDatosAPI($dni_buscado);
-    if (isset($respuesta['datos'])) {
-      $datos = $respuesta['datos'];
-      try {
-        $pdo->beginTransaction();
-
-        $sql = "INSERT INTO usuarios (nombres, apellidos, dni, genero, id_tipo_usuario, id_estado, fecha_registro, fecha_fin_registro, usuario_creacion)
-                VALUES (:nombres, :apellidos, :dni, 'M', 1, 1, CURDATE(), CONCAT(YEAR(CURDATE()), '-12-30'), 'SISTEMA_PUBLICO')";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-          ':nombres' => $datos['Nombres'],
-          ':apellidos' => $datos['Paterno'] . ' ' . $datos['Materno'],
-          ':dni' => $datos['Nro_Doc']
-        ]);
-        $id_usuario = $pdo->lastInsertId();
-
-        $stmt_f = $pdo->prepare("SELECT id_facultad FROM facultades WHERE nombre_facultad = ?");
-        $stmt_f->execute([$datos['Facultad']]);
-        $id_facultad = $stmt_f->fetchColumn();
-        if (!$id_facultad && !empty($datos['Facultad'])) {
-          $stmt_fi = $pdo->prepare("INSERT INTO facultades (nombre_facultad) VALUES (?)");
-          $stmt_fi->execute([$datos['Facultad']]);
-          $id_facultad = $pdo->lastInsertId();
-        }
-
-        $stmt_e = $pdo->prepare("SELECT id_escuela FROM escuelas WHERE nombre_escuela = ? AND id_facultad = ?");
-        $stmt_e->execute([$datos['Escuela'], $id_facultad]);
-        $id_escuela = $stmt_e->fetchColumn();
-        if (!$id_escuela && !empty($datos['Escuela']) && $id_facultad) {
-          $stmt_ei = $pdo->prepare("INSERT INTO escuelas (id_facultad, nombre_escuela) VALUES (?, ?)");
-          $stmt_ei->execute([$id_facultad, $datos['Escuela']]);
-          $id_escuela = $pdo->lastInsertId();
-        }
-
-        $sql = "INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, id_facultad, id_escuela, nivel_academico, anio_estudio)
-                VALUES (:id_usuario, :codigo, :id_facultad, :id_escuela, :nivel, :anio)";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([
-          ':id_usuario' => $id_usuario,
-          ':codigo' => $datos['Codigo'] ?? '',
-          ':id_facultad' => $id_facultad,
-          ':id_escuela' => $id_escuela,
-          ':nivel' => $datos['Niv_Acad'],
-          ':anio' => $datos['anio_estudio'] ?? ''
-        ]);
-
-        $pdo->commit();
-
-        $tipo_mensaje = 'success';
-        $mensaje = '¡Te hemos registrado en el sistema! Pasa tu DNI nuevamente para marcar tu entrada.';
-        $datos_usuario = [
-          'nombre_completo' => $datos['Paterno'] . ' ' . $datos['Materno'] . ', ' . $datos['Nombres'],
-          'tipo_registro' => 'Registro',
-          'fecha_hora' => date('d/m/Y H:i:s')
-        ];
-      } catch (PDOException $e) {
-        $pdo->rollBack();
-        $tipo_mensaje = 'error';
-        $mensaje = 'Error al registrar. Por favor, acércate a administración.';
-      }
-    } else {
-      $tipo_mensaje = 'info';
-      $mensaje = 'DNI no encontrado. Por favor, regístrate en la oficina de administración.';
-    }
-  }
-
-  $_SESSION['mensaje'] = $mensaje;
-  $_SESSION['tipo_mensaje'] = $tipo_mensaje;
-  $_SESSION['datos_usuario'] = $datos_usuario;
-  header("Location: estudiante.php");
-  exit();
-}
-
-$mensaje = $_SESSION['mensaje'] ?? '';
-$tipo_mensaje = $_SESSION['tipo_mensaje'] ?? '';
-$datos_usuario = $_SESSION['datos_usuario'] ?? null;
-unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario']);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -371,54 +111,55 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
     .content-box {
       width: 100%;
-      max-width: 900px;
+      max-width: 1100px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 20px;
     }
 
     #liveClock {
-      font-size: 4.2rem;
+      font-size: 5.5rem;
       font-weight: 700;
       color: #fff;
       line-height: 1;
-      text-shadow: 0 5px 15px rgba(0, 0, 0, 0.7);
+      text-shadow: 0 5px 20px rgba(0, 0, 0, 0.8);
       text-align: center;
-      margin-top: 20px;
+      margin-top: 10px;
     }
 
     #liveDate {
       color: var(--secondary-color);
-      font-size: 1.4rem;
+      font-size: 1.8rem;
       font-weight: 500;
-      text-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+      text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
       text-align: center;
-      margin-bottom: 15px;
+      margin-bottom: 20px;
     }
 
     .uni-header {
       background: var(--card-bg);
-      border-radius: 18px;
-      padding: 12px 25px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-      border-bottom: 5px solid var(--secondary-color);
+      border-radius: 24px;
+      padding: 20px 40px;
+      box-shadow: 0 15px 45px rgba(0, 0, 0, 0.6);
+      border-bottom: 8px solid var(--secondary-color);
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
 
-    .logo-img { height: 70px; }
+    .logo-img { height: 85px; }
 
     .header-text h1 {
-      font-size: 20px;
+      font-size: 31px;
       font-weight: 800;
       color: var(--primary-color);
       margin: 0;
       text-transform: uppercase;
+      letter-spacing: -0.5px;
     }
 
     .header-text h2 {
-      font-size: 16px;
+      font-size: 22px;
       font-weight: 700;
       color: var(--text-color);
       margin: 0;
@@ -426,57 +167,60 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     }
 
     .header-text .subtitle {
-      margin-left: 5px;
+      margin-left: 8px;
       color: var(--secondary-color);
       font-weight: 600;
-      font-size: 14px;
-      letter-spacing: 0.5px;
+      font-size: 18px;
+      letter-spacing: 0.8px;
     }
 
     .register-card {
       background: var(--card-bg);
-      border-radius: 22px;
-      padding: 25px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      border-radius: 28px;
+      padding: 40px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);
       text-align: center;
     }
 
     .instruction-text {
-      font-size: 16px;
+      font-size: 20px;
       color: #555;
-      margin-bottom: 15px;
-      font-weight: 500;
+      margin-bottom: 25px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
 
     .dni-input {
-      font-size: 42px;
+      font-size: 64px;
       text-align: center;
-      padding: 12px;
-      border: 4px solid #cbd5e0;
-      border-radius: 18px;
-      font-weight: 700;
-      letter-spacing: 10px;
+      padding: 20px;
+      border: 5px solid #cbd5e0;
+      border-radius: 22px;
+      font-weight: 800;
+      letter-spacing: 15px;
       color: var(--primary-color);
-      background: #edf2f7;
-      max-width: 480px;
+      background: #f8fafc;
+      max-width: 650px;
       margin: 0 auto;
-      transition: all 0.3s ease;
+      transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
     }
 
     .dni-input:focus {
       border-color: var(--secondary-color);
       background: #fff;
-      box-shadow: 0 0 20px rgba(197, 160, 89, 0.3);
+      box-shadow: 0 0 30px rgba(197, 160, 89, 0.4);
+      transform: scale(1.02);
       outline: none;
     }
 
     .user-feedback {
-      margin-top: 20px;
-      padding: 18px;
+      margin-top: 30px;
+      padding: 25px;
       background: rgba(16, 185, 129, 0.1);
-      border: 2px solid #10B981;
-      border-radius: 16px;
-      animation: zoomIn 0.3s ease-out;
+      border: 3px solid #10B981;
+      border-radius: 20px;
+      animation: zoomIn 0.4s ease-out;
     }
 
     .user-feedback.error {
@@ -486,23 +230,25 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
     .success-badge {
       color: #10B981;
-      font-weight: 800;
-      font-size: 18px;
+      font-weight: 900;
+      font-size: 24px;
       text-transform: uppercase;
-      margin-bottom: 5px;
+      margin-bottom: 8px;
     }
 
     .user-name {
-      font-size: 22px;
-      font-weight: 700;
+      font-size: 28px;
+      font-weight: 800;
       color: var(--text-color);
     }
 
     .footer {
       text-align: center;
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 11px;
-      margin-top: 10px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 14px;
+      font-weight: 500;
+      margin-top: 20px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.5);
     }
 
     @keyframes zoomIn {
@@ -592,7 +338,6 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       #liveClock { font-size: 4rem; }
       #liveDate { font-size: 1.2rem; }
       .header-text h1 { font-size: 20px; }
-      .logo-img { height: 55px; }
       .dni-input { font-size: 32px; letter-spacing: 6px; max-width: 400px; }
     }
 
@@ -601,7 +346,6 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       #liveClock { font-size: 3rem; }
       #liveDate { font-size: 1rem; margin-bottom: 10px; }
       .uni-header { padding: 10px 15px; flex-direction: column; text-align: center; }
-      .logo-img { height: 45px; margin-bottom: 8px; }
       .header-text h1 { font-size: 16px; }
       .register-card { padding: 15px; }
       .dni-input { font-size: 24px; letter-spacing: 4px; padding: 10px; max-width: 100%; }
@@ -647,7 +391,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         <img src="../../img/inicio_biblio.png" alt="Biblio" class="logo-img">
         <div class="header-text">
           <div style="font-size: 15px; color: #718096; font-weight: 600;">Universidad Nacional Hermilio Valdizán</div>
-          <h1>SISTEMA DE CONTROL DE ASISTENCIA - UNHEVAL</h1>
+          <h1>SISTEMA DE CONTROL DE ASISTENCIA</h1>
           <div class="mt-1">
             <h2>BIBLIOTECA CENTRAL</h2>
             <span class="subtitle">"Javier Pulgar Vidal"</span>
@@ -657,7 +401,6 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       </header>
 
       <?php if (!$notificacion_horario['permitido']): ?>
-        <!-- Banner de Biblioteca Cerrada -->
         <div style="background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(239, 68, 68, 0.4);">
           <i class="fas fa-clock fa-2x" style="margin-bottom: 10px;"></i>
           <h3 style="margin: 0; font-weight: 700;">BIBLIOTECA CERRADA</h3>
@@ -666,12 +409,10 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       <?php endif; ?>
 
       <?php if ($notificacion_horario['permitido'] && !$notificacion_aforo['permitido']): ?>
-        <!-- Banner de Aforo Lleno -->
         <div style="background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%); color: white; padding: 15px 25px; border-radius: 12px; margin: 15px 0; text-align: center; box-shadow: 0 5px 20px rgba(245, 158, 11, 0.4);">
           <i class="fas fa-users-slash fa-2x" style="margin-bottom: 10px;"></i>
           <h3 style="margin: 0; font-weight: 700;">AFORO COMPLETO</h3>
           <p style="margin: 10px 0 0 0; opacity: 0.9;"><?= htmlspecialchars($notificacion_aforo['mensaje']) ?></p>
-          <p style="margin: 5px 0 0 0; font-size: 14px; opacity: 0.8;">Si ya te encuentras dentro, puedes marcar tu salida normalmente.</p>
         </div>
       <?php endif; ?>
 
@@ -679,32 +420,12 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
         <div class="instruction-text">
           <i class="fas fa-barcode me-2"></i> PASE SU CARNET O INGRESE SU DNI
         </div>
-        <form method="POST" id="formAsistencia">
+        <form id="formAsistencia">
           <input type="text" class="form-control dni-input" name="dni" id="dniInput"
             placeholder="DNI" maxlength="8" pattern="[0-9]{8}" autocomplete="off" required autofocus>
         </form>
 
-        <?php if ($datos_usuario): ?>
-          <div class="user-feedback <?= $tipo_mensaje === 'error' ? 'error' : '' ?>">
-            <div class="success-badge">
-              <i class="fas fa-<?= $tipo_mensaje === 'success' ? 'check-circle' : ($datos_usuario['tipo_registro'] === 'Registro' ? 'user-plus' : 'exclamation-circle') ?>"></i>
-              <?php
-              if ($datos_usuario['tipo_registro'] === 'Entrada') echo 'BIENVENIDO';
-              elseif ($datos_usuario['tipo_registro'] === 'Salida') echo 'HASTA PRONTO';
-              elseif ($datos_usuario['tipo_registro'] === 'Registro') echo 'REGISTRADO';
-              else echo 'AVISO';
-              ?>
-            </div>
-            <div class="user-name"><?= htmlspecialchars($datos_usuario['nombre_completo']) ?></div>
-            <div style="font-size: 14px; opacity: 0.8; margin-top: 5px;">
-              <?php if ($datos_usuario['tipo_registro'] === 'Registro'): ?>
-                <strong>Registrado en el sistema</strong> — Pasa tu DNI nuevamente para marcar tu entrada
-              <?php else: ?>
-                <strong><?= $datos_usuario['tipo_registro'] ?></strong> registrada a las <?= $datos_usuario['fecha_hora'] ?>
-              <?php endif; ?>
-            </div>
-          </div>
-        <?php endif; ?>
+        <div id="feedbackContainer" style="display: none;"></div>
       </main>
 
       <div class="footer">
@@ -735,37 +456,84 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     setInterval(mantenerEnfoque, 2000);
     mantenerEnfoque();
 
-    input.addEventListener('input', function() {
-      this.value = this.value.replace(/[^0-9]/g, '');
-      if (this.value.length === 8) form.submit();
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      procesarAsistencia();
     });
 
-    <?php if (!empty($mensaje)): ?>
-      Swal.fire({
-        icon: '<?= $tipo_mensaje ?>',
-        title: '<?= $tipo_mensaje == "success" ? "¡Registro Exitoso!" : "Aviso" ?>',
-        text: '<?= addslashes($mensaje) ?>',
-        background: '#fff',
-        color: '#2d3748',
-        confirmButtonColor: '#0c2340',
-        timer: 2000,
-        timerProgressBar: true
-      });
-    <?php endif; ?>
+    input.addEventListener('input', function() {
+      this.value = this.value.replace(/[^0-9]/g, '');
+      if (this.value.length === 8) {
+          procesarAsistencia();
+      }
+    });
 
-    <?php if ($datos_usuario): ?>
-      setTimeout(function() {
-        var feedback = document.querySelector('.user-feedback');
-        if (feedback) {
-          feedback.style.transition = 'opacity 0.5s ease';
-          feedback.style.opacity = '0';
-          setTimeout(function() { feedback.style.display = 'none'; }, 500);
-        }
-      }, 4000);
-    <?php endif; ?>
+    function procesarAsistencia() {
+        const dni = input.value;
+        if (dni.length !== 8) return;
+
+        const formData = new FormData();
+        formData.append('dni', dni);
+
+        fetch('../../api/registrar_asistencia.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            input.value = '';
+            
+            Swal.fire({
+                icon: data.type || 'info',
+                title: data.success ? '¡Registro Exitoso!' : 'Aviso',
+                text: data.message,
+                background: '#fff',
+                color: '#2d3748',
+                showConfirmButton: false,
+                timer: 2500,
+                timerProgressBar: true
+            });
+
+            if (data.userData) {
+                const container = document.getElementById('feedbackContainer');
+                const isError = data.type === 'error';
+                const icon = data.type === 'success' ? 'check-circle' : (data.userData.tipo_registro === 'Registro' ? 'user-plus' : 'exclamation-circle');
+                const badgeText = data.userData.tipo_registro.toUpperCase();
+                
+                container.innerHTML = `
+                    <div class="user-feedback ${isError ? 'error' : ''}">
+                        <div class="success-badge">
+                            <i class="fas fa-${icon}"></i> ${badgeText}
+                        </div>
+                        <div class="user-name">${data.userData.nombre_completo}</div>
+                        <div style="font-size: 14px; opacity: 0.8; margin-top: 5px;">
+                            ${data.userData.tipo_registro === 'Registro' ? 
+                              '<strong>Registrado</strong> — Pasa tu DNI de nuevo para entrar' : 
+                              '<strong>' + data.userData.tipo_registro + '</strong> registrada a las ' + data.userData.fecha_hora}
+                        </div>
+                    </div>
+                `;
+                container.style.display = 'block';
+                container.style.opacity = '1';
+
+                setTimeout(() => {
+                    container.style.transition = 'opacity 0.5s ease';
+                    container.style.opacity = '0';
+                    setTimeout(() => container.style.display = 'none', 500);
+                }, 5000);
+            }
+            
+            if (<?php echo $modo_kiosko ? 'true' : 'false'; ?>) {
+                updateAforoLive();
+            }
+        })
+        .catch(err => {
+            console.error('Error:', err);
+            Swal.fire('Error', 'No se pudo procesar la solicitud', 'error');
+        });
+    }
 
     <?php if ($modo_kiosko): ?>
-      // === MODO KIOSKO AVANZADO ===
       let idleTimer;
       const overlay = document.getElementById('kioskOverlay');
 
