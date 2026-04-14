@@ -127,46 +127,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
   if ($usuario_bd) {
     $id_usuario = $usuario_bd['id_usuario'];
 
-    // ==================== PUNTO 6: VERIFICAR SI ESTÁ BLOQUEADO/SANCIONADO ====================
     if ($usuario_bd['id_estado'] != 1) {
       $tipo_mensaje = 'error';
       $mensaje = 'TU CUENTA ESTÁ BLOQUEADA. Por favor, acércate a la oficina de administración de la biblioteca.';
 
-      // Registrar alerta para el administrador
       $sql_alerta = "INSERT INTO alertas_asistencia (id_usuario, dni, mensaje, fecha, hora) 
                      VALUES (:id, :dni, 'Intento de acceso - Usuario bloqueado/sancionado', CURDATE(), CURTIME())";
       $stmt_alerta = $pdo->prepare($sql_alerta);
       $stmt_alerta->execute([':id' => $id_usuario, ':dni' => $dni_buscado]);
 
-      // ==================== VALIDAR HORARIO DE ATENCIÓN ====================
     } elseif (!$notificacion_horario['permitido']) {
       $tipo_mensaje = 'warning';
       $mensaje = $notificacion_horario['mensaje'];
 
-      // ==================== VALIDAR AFORO DISPONIBLE (solo para entradas) ====================
     } elseif (!$notificacion_aforo['permitido']) {
-      // Verificar si el usuario va a marcar entrada o salida
       $sql_check = "SELECT tipo_registro FROM asistencias WHERE id_usuario = :id ORDER BY id_asistencia DESC LIMIT 1";
       $stmt_check = $pdo->prepare($sql_check);
       $stmt_check->execute([':id' => $id_usuario]);
       $ultimo_check = $stmt_check->fetch(PDO::FETCH_ASSOC);
 
-      // Solo bloquear si es una ENTRADA (salidas siempre permitidas)
       if (!$ultimo_check || $ultimo_check['tipo_registro'] == 'Salida') {
         $tipo_mensaje = 'warning';
         $mensaje = $notificacion_aforo['mensaje'];
       } else {
-        // Es una salida, continuar normalmente
         goto procesar_asistencia;
       }
     } else {
       procesar_asistencia:
-      // =====================================================
-      // LÓGICA DE REGISTRO DE ASISTENCIA (ENTRADA/SALIDA)
-      // CON MANEJO INTELIGENTE DE OLVIDO DE SALIDA
-      // =====================================================
-
-      // Obtener el último registro de asistencia de este usuario
       $sql_ultimo = "SELECT id_asistencia, tipo_registro, fecha, hora
                      FROM asistencias 
                      WHERE id_usuario = :id_usuario 
@@ -179,64 +166,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
       $fecha_hoy = date('Y-m-d');
       $hora_actual = date('H:i:s');
       $puede_registrar = true;
-      $tipo_registro = 'Entrada'; // Por defecto es Entrada
+      $tipo_registro = 'Entrada';
 
-      // Constantes de configuración
-      $HORA_CIERRE_AUTOMATICO = '20:30:00'; // 8:30 PM - cierre automático de sesiones
-      $TIEMPO_MAXIMO_SESION_HORAS = 4; // 4 horas máximo de sesión activa
+      $HORA_CIERRE_AUTOMATICO = '20:30:00';
+      $TIEMPO_MAXIMO_SESION_HORAS = 4;
 
       if ($ultimo) {
-        // Calcular segundos desde el último registro
         $datetime_ultimo = new DateTime($ultimo['fecha'] . ' ' . $ultimo['hora']);
         $datetime_ahora = new DateTime();
         $diferencia_seg = $datetime_ahora->getTimestamp() - $datetime_ultimo->getTimestamp();
         $diferencia_horas = $diferencia_seg / 3600;
 
-        // BLOQUEO ANTI-SPAM: Si pasaron menos de 30 segundos, no permitir nuevo registro
         if ($diferencia_seg < 30 && $diferencia_seg >= 0) {
           $puede_registrar = false;
           $tipo_mensaje = 'warning';
           $falta = 30 - $diferencia_seg;
           $mensaje = "Ya registraste tu asistencia. Espera {$falta} segundos.";
         } else {
-          // ===== LÓGICA DE DETERMINACIÓN ENTRADA/SALIDA =====
-          
-          // Punto clave: Verificar si el modo salida está activado en configuración
           if (($config_sistema['asistencia_modo_salida'] ?? '1') === '0') {
-            // MODO SOLO INGRESO ACTIVADO: Siempre será entrada
             $tipo_registro = 'Entrada';
           } else {
-            // MODO NORMAL: Alternar entre Entrada y Salida
             $es_mismo_dia = ($ultimo['fecha'] == $fecha_hoy);
             $ultimo_fue_entrada = ($ultimo['tipo_registro'] == 'Entrada');
 
             if ($ultimo_fue_entrada) {
-              // El último registro fue ENTRADA
-
               if (!$es_mismo_dia) {
-                // CASO 1: Entrada de día anterior → El usuario olvidó marcar salida ayer
-                // Permitir nueva ENTRADA (el sistema asume que ya salió y no marcó)
                 $tipo_registro = 'Entrada';
               } elseif ($ultimo['hora'] < $HORA_CIERRE_AUTOMATICO && date('H:i:s') >= $HORA_CIERRE_AUTOMATICO) {
-                // CASO 2: Entrada del mismo día pero ya pasó la hora de cierre (8:30 PM)
-                // Si entró antes de las 8:30 y ahora son después de las 8:30, permitir nueva entrada
                 $tipo_registro = 'Entrada';
               } elseif ($diferencia_horas >= $TIEMPO_MAXIMO_SESION_HORAS) {
-                // CASO 3: Entrada del mismo día pero más de 4 horas atrás
-                // El usuario probablemente olvidó marcar salida y vuelve a entrar
                 $tipo_registro = 'Entrada';
               } else {
-                // CASO NORMAL: Entrada reciente del mismo día → Espera SALIDA
                 $tipo_registro = 'Salida';
               }
             } else {
-              // El último registro fue SALIDA → Ahora toca ENTRADA
               $tipo_registro = 'Entrada';
             }
           }
         }
       }
-      // Si no hay registro previo, será Entrada (ya está por defecto)
 
       if ($puede_registrar) {
         try {
@@ -269,15 +237,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
       }
     }
   } else {
-    // Buscar en API externa
     $respuesta = obtenerDatosAPI($dni_buscado);
     if (isset($respuesta['datos'])) {
       $datos = $respuesta['datos'];
       try {
         $pdo->beginTransaction();
 
-        // Insertar usuario (SOLO registrar, NO marcar asistencia)
-        // Se establece por defecto el 30 de diciembre del año actual para estudiantes UNHEVAL
         $sql = "INSERT INTO usuarios (nombres, apellidos, dni, genero, id_tipo_usuario, id_estado, fecha_registro, fecha_fin_registro, usuario_creacion)
                 VALUES (:nombres, :apellidos, :dni, 'M', 1, 1, CURDATE(), CONCAT(YEAR(CURDATE()), '-12-30'), 'SISTEMA_PUBLICO')";
         $stmt = $pdo->prepare($sql);
@@ -288,7 +253,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
         ]);
         $id_usuario = $pdo->lastInsertId();
 
-        // 1. Obtener o crear ID de Facultad
         $stmt_f = $pdo->prepare("SELECT id_facultad FROM facultades WHERE nombre_facultad = ?");
         $stmt_f->execute([$datos['Facultad']]);
         $id_facultad = $stmt_f->fetchColumn();
@@ -298,7 +262,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
           $id_facultad = $pdo->lastInsertId();
         }
 
-        // 2. Obtener o crear ID de Escuela
         $stmt_e = $pdo->prepare("SELECT id_escuela FROM escuelas WHERE nombre_escuela = ? AND id_facultad = ?");
         $stmt_e->execute([$datos['Escuela'], $id_facultad]);
         $id_escuela = $stmt_e->fetchColumn();
@@ -308,7 +271,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
           $id_escuela = $pdo->lastInsertId();
         }
 
-        // 3. Insertar datos de estudiante
         $sql = "INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, id_facultad, id_escuela, nivel_academico, anio_estudio)
                 VALUES (:id_usuario, :codigo, :id_facultad, :id_escuela, :nivel, :anio)";
         $stmt = $pdo->prepare($sql);
@@ -320,9 +282,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['dni'])) {
           ':nivel' => $datos['Niv_Acad'],
           ':anio' => $datos['anio_estudio'] ?? ''
         ]);
-
-        // NO registrar asistencia automáticamente al crear el usuario
-        // El estudiante debe pasar su carnet nuevamente para registrar su primera entrada
 
         $pdo->commit();
 
@@ -375,8 +334,7 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       --text-color: #2d3748;
     }
 
-    html,
-    body {
+    html, body {
       height: 100%;
       margin: 0;
       overflow: hidden;
@@ -398,13 +356,8 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     }
 
     @keyframes panLeft {
-      from {
-        transform: scale(1.1) translateX(0);
-      }
-
-      to {
-        transform: scale(1.2) translateX(-30px);
-      }
+      from { transform: scale(1.1) translateX(0); }
+      to { transform: scale(1.2) translateX(-30px); }
     }
 
     .main-wrapper {
@@ -426,7 +379,6 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
     #liveClock {
       font-size: 4.2rem;
-      /* Reducido de 5.5rem */
       font-weight: 700;
       color: #fff;
       line-height: 1;
@@ -455,13 +407,10 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       justify-content: space-between;
     }
 
-    .logo-img {
-      height: 70px;
-    }
+    .logo-img { height: 70px; }
 
     .header-text h1 {
       font-size: 20px;
-      /* Reducido de 24px */
       font-weight: 800;
       color: var(--primary-color);
       margin: 0;
@@ -470,7 +419,6 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
 
     .header-text h2 {
       font-size: 16px;
-      /* Aumentado de 14px */
       font-weight: 700;
       color: var(--text-color);
       margin: 0;
@@ -482,7 +430,6 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       color: var(--secondary-color);
       font-weight: 600;
       font-size: 14px;
-      /* Aumentado de 13px */
       letter-spacing: 0.5px;
     }
 
@@ -559,125 +506,137 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     }
 
     @keyframes zoomIn {
-      from {
-        transform: scale(0.95);
-        opacity: 0;
-      }
-
-      to {
-        transform: scale(1);
-        opacity: 1;
-      }
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
     }
+
+    /* ========== MEJORAS MODO KIOSKO ========== */
+    .kiosk-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(12, 35, 64, 0.95);
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      text-align: center;
+      cursor: pointer;
+    }
+    .kiosk-badge {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 8px 15px;
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: white;
+      font-size: 14px;
+      z-index: 1000;
+    }
+    .live-pulse {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: #10B981;
+      border-radius: 50%;
+      margin-right: 8px;
+      box-shadow: 0 0 8px #10B981;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.5); opacity: 0.5; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .no-cursor { cursor: none !important; }
+    body.kiosk-active { user-select: none; -webkit-user-select: none; }
+    
+    .aforo-widget {
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        background: white;
+        padding: 15px;
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 100;
+        min-width: 180px;
+    }
+    .aforo-icon {
+        width: 45px;
+        height: 45px;
+        background: var(--primary-color);
+        color: var(--secondary-color);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+    }
+    .aforo-info { text-align: left; }
+    .aforo-label { font-size: 10px; font-weight: 700; color: #718096; text-transform: uppercase; }
+    .aforo-value { font-size: 18px; font-weight: 800; color: var(--primary-color); line-height: 1; }
 
     /* ========== RESPONSIVIDAD ========== */
     @media (max-width: 991.98px) {
-      #liveClock {
-        font-size: 4rem;
-      }
-
-      #liveDate {
-        font-size: 1.2rem;
-      }
-
-      .header-text h1 {
-        font-size: 20px;
-      }
-
-      .logo-img {
-        height: 55px;
-      }
-
-      .dni-input {
-        font-size: 32px;
-        letter-spacing: 6px;
-        max-width: 400px;
-      }
+      #liveClock { font-size: 4rem; }
+      #liveDate { font-size: 1.2rem; }
+      .header-text h1 { font-size: 20px; }
+      .logo-img { height: 55px; }
+      .dni-input { font-size: 32px; letter-spacing: 6px; max-width: 400px; }
     }
 
     @media (max-width: 767.98px) {
-      .main-wrapper {
-        padding: 10px;
-      }
-
-      #liveClock {
-        font-size: 3rem;
-      }
-
-      #liveDate {
-        font-size: 1rem;
-        margin-bottom: 10px;
-      }
-
-      .uni-header {
-        padding: 10px 15px;
-        flex-direction: column;
-        text-align: center;
-      }
-
-      .logo-img {
-        height: 45px;
-        margin-bottom: 8px;
-      }
-
-      .header-text h1 {
-        font-size: 16px;
-      }
-
-      .header-text p {
-        font-size: 11px;
-      }
-
-      .register-card {
-        padding: 15px;
-      }
-
-      .instruction-text {
-        font-size: 14px;
-      }
-
-      .dni-input {
-        font-size: 24px;
-        letter-spacing: 4px;
-        padding: 10px;
-        max-width: 100%;
-      }
-
-      .user-feedback {
-        padding: 12px;
-      }
-
-      .success-badge {
-        font-size: 15px;
-      }
-
-      .user-name {
-        font-size: 18px;
-      }
-    }
-
-    @media (max-width: 575.98px) {
-      #liveClock {
-        font-size: 2.5rem;
-      }
-
-      .logo-img:first-child {
-        display: none;
-      }
-
-      .header-text h1 {
-        font-size: 14px;
-      }
-
-      .dni-input {
-        font-size: 20px;
-        letter-spacing: 3px;
-      }
+      .main-wrapper { padding: 10px; }
+      #liveClock { font-size: 3rem; }
+      #liveDate { font-size: 1rem; margin-bottom: 10px; }
+      .uni-header { padding: 10px 15px; flex-direction: column; text-align: center; }
+      .logo-img { height: 45px; margin-bottom: 8px; }
+      .header-text h1 { font-size: 16px; }
+      .register-card { padding: 15px; }
+      .dni-input { font-size: 24px; letter-spacing: 4px; padding: 10px; max-width: 100%; }
     }
   </style>
 </head>
 
-<body>
+<body class="<?= $modo_kiosko ? 'kiosk-active' : '' ?>">
+  <?php if ($modo_kiosko): ?>
+    <div id="kioskOverlay" class="kiosk-overlay" onclick="activarModoKiosko()">
+        <div class="mb-4">
+            <i class="fas fa-desktop fa-5x text-secondary mb-3"></i>
+            <h1 class="display-4 font-weight-bold">MODO KIOSKO ACTIVO</h1>
+            <p class="lead">Haga clic aquí para iniciar el terminal a pantalla completa</p>
+        </div>
+        <div class="badge badge-warning p-2">
+            <i class="fas fa-lock mr-2"></i> Protegido contra navegación externa
+        </div>
+    </div>
+    
+    <div class="kiosk-badge">
+        <span class="live-pulse"></span> Terminal Biblioteca 01 - UNHEVAL
+    </div>
+
+    <div class="aforo-widget" id="aforoWidget" style="display: none;">
+        <div class="aforo-icon">
+            <i class="fas fa-users"></i>
+        </div>
+        <div class="aforo-info">
+            <div class="aforo-label">Ocupación Actual</div>
+            <div class="aforo-value"><span id="aforoNow">0</span> / <span id="aforoMax">0</span></div>
+        </div>
+    </div>
+  <?php endif; ?>
+
   <div class="bg-animated"></div>
   <div class="main-wrapper">
     <div class="content-box">
@@ -757,15 +716,8 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
   <script>
     function updateClock() {
       const now = new Date();
-      document.getElementById('liveClock').textContent = now.toLocaleTimeString('es-ES', {
-        hour12: false
-      });
-      const options = {
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric'
-      };
+      document.getElementById('liveClock').textContent = now.toLocaleTimeString('es-ES', { hour12: false });
+      const options = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
       let dateStr = now.toLocaleDateString('es-ES', options);
       document.getElementById('liveDate').textContent = dateStr.charAt(0).toUpperCase() + dateStr.slice(1);
     }
@@ -775,42 +727,17 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     const input = document.getElementById('dniInput');
     const form = document.getElementById('formAsistencia');
 
-    // === SISTEMA DE AUTO-ENFOQUE PERMANENTE ===
-    // Mantener el input siempre enfocado para escaneo de carnet
     function mantenerEnfoque() {
-      if (document.activeElement !== input) {
-        input.focus();
-      }
+      if (document.activeElement !== input) input.focus();
     }
-
-    // Re-enfocar inmediatamente cuando pierde el foco
-    input.addEventListener('blur', function() {
-      setTimeout(mantenerEnfoque, 50);
-    });
-
-    // Enfocar al hacer clic en cualquier parte de la página
-    document.addEventListener('click', function(e) {
-      if (e.target !== input) {
-        setTimeout(mantenerEnfoque, 50);
-      }
-    });
-
-    // Enfocar al tocar la pantalla (para tablets/kioscos táctiles)
-    document.addEventListener('touchstart', function() {
-      setTimeout(mantenerEnfoque, 50);
-    });
-
-    // Verificar enfoque cada 2 segundos como respaldo
+    input.addEventListener('blur', () => setTimeout(mantenerEnfoque, 50));
+    document.addEventListener('click', (e) => { if (e.target !== input) setTimeout(mantenerEnfoque, 50); });
     setInterval(mantenerEnfoque, 2000);
-
-    // Enfoque inicial
     mantenerEnfoque();
 
     input.addEventListener('input', function() {
       this.value = this.value.replace(/[^0-9]/g, '');
-      if (this.value.length === 8) {
-        form.submit();
-      }
+      if (this.value.length === 8) form.submit();
     });
 
     <?php if (!empty($mensaje)): ?>
@@ -826,12 +753,11 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
       });
     <?php endif; ?>
 
-    // Auto-ocultar datos del usuario después de 4 segundos
     <?php if ($datos_usuario): ?>
       setTimeout(function() {
         var feedback = document.querySelector('.user-feedback');
         if (feedback) {
-          feedback.style.transition = 'opacity 0.5s ease, max-height 0.5s ease';
+          feedback.style.transition = 'opacity 0.5s ease';
           feedback.style.opacity = '0';
           setTimeout(function() { feedback.style.display = 'none'; }, 500);
         }
@@ -839,61 +765,64 @@ unset($_SESSION['mensaje'], $_SESSION['tipo_mensaje'], $_SESSION['datos_usuario'
     <?php endif; ?>
 
     <?php if ($modo_kiosko): ?>
-      // === MODO KIOSKO ===
-      // Pantalla completa automática
-      function enterFullscreen() {
+      // === MODO KIOSKO AVANZADO ===
+      let idleTimer;
+      const overlay = document.getElementById('kioskOverlay');
+
+      function activarModoKiosko() {
         const elem = document.documentElement;
-        if (elem.requestFullscreen) {
-          elem.requestFullscreen();
-        } else if (elem.webkitRequestFullscreen) {
-          elem.webkitRequestFullscreen();
-        } else if (elem.msRequestFullscreen) {
-          elem.msRequestFullscreen();
-        }
+        if (elem.requestFullscreen) elem.requestFullscreen();
+        else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+        overlay.style.display = 'none';
+        document.body.classList.add('kiosk-active');
+        mantenerEnfoque();
       }
 
-      // Intentar entrar en pantalla completa al cargar
-      document.addEventListener('click', function activateFullscreen() {
-        enterFullscreen();
-        document.removeEventListener('click', activateFullscreen);
-      }, {
-        once: true
-      });
-
-      // Bloquear teclas de navegación
-      document.addEventListener('keydown', function(e) {
-        // Bloquear F5, F11, Ctrl+R, Ctrl+W, Alt+F4
-        if (e.key === 'F5' || e.key === 'F11' ||
-          (e.ctrlKey && (e.key === 'r' || e.key === 'w')) ||
-          (e.altKey && e.key === 'F4')) {
-          e.preventDefault();
-          return false;
-        }
-        // Bloquear Escape
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          enterFullscreen();
-          return false;
-        }
-      });
-
-      // Bloquear clic derecho
-      document.addEventListener('contextmenu', function(e) {
-        e.preventDefault();
-        return false;
-      });
-
-      // Re-entrar a pantalla completa si se sale
       document.addEventListener('fullscreenchange', function() {
-        if (!document.fullscreenElement) {
-          setTimeout(enterFullscreen, 100);
+        if (document.fullscreenElement) {
+            overlay.style.display = 'none';
+            document.body.classList.add('no-cursor');
+        } else {
+            overlay.style.display = 'flex';
+            document.body.classList.remove('no-cursor');
         }
       });
 
-      // Mostrar indicador de modo kiosko
-      console.log('%c🔒 MODO KIOSKO ACTIVO', 'background: #0c2340; color: #c5a059; font-size: 16px; padding: 10px;');
+      function resetIdleTimer() {
+        document.body.classList.remove('no-cursor');
+        clearTimeout(idleTimer);
+        if (document.fullscreenElement) {
+            idleTimer = setTimeout(() => {
+                document.body.classList.add('no-cursor');
+            }, 3000);
+        }
+      }
+      document.addEventListener('mousemove', resetIdleTimer);
+      document.addEventListener('keydown', resetIdleTimer);
+
+      document.addEventListener('contextmenu', e => e.preventDefault());
+      document.addEventListener('keydown', function(e) {
+        const blockedKeys = ['F5', 'F11', 'F12', 'Escape'];
+        if (blockedKeys.includes(e.key) || (e.ctrlKey && ['r', 'w', 'u', 'i'].includes(e.key.toLowerCase())) || (e.altKey && e.key === 'F4')) {
+          e.preventDefault();
+        }
+      });
+
+      function updateAforoLive() {
+        fetch('../../api/get_aforo.php')
+          .then(res => res.json())
+          .then(data => {
+            if (data.success && data.activo) {
+              document.getElementById('aforoWidget').style.display = 'flex';
+              document.getElementById('aforoNow').textContent = data.aforo_actual;
+              document.getElementById('aforoMax').textContent = data.capacidad;
+            }
+          })
+          .catch(err => console.error('Error fetching aforo:', err));
+      }
+      setInterval(updateAforoLive, 30000);
+      updateAforoLive();
     <?php endif; ?>
   </script>
 </body>
-
 </html>
