@@ -164,14 +164,22 @@ try {
             $stmt_est = $pdo->prepare("INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, id_facultad, id_escuela, nivel_academico, anio_estudio) VALUES (?, ?, ?, ?, ?, ?)");
             $stmt_est->execute([$id_u, $d['Codigo']??'', $id_f, $id_esc, $d['Niv_Acad'], $d['anio_estudio']??'']);
             
+            // --- NUEVO: Registro de asistencia inmediata ---
+            $tipo_reg = 'Entrada';
+            $stmt_ins = $pdo->prepare("INSERT INTO asistencias (id_usuario, tipo_registro, fecha, hora, metodo_registro) VALUES (?, ?, CURDATE(), CURTIME(), 'SISTEMA_PUBLICO')");
+            $stmt_ins->execute([$id_u, $tipo_reg]);
+            // ----------------------------------------------
+
             $pdo->commit();
+
+            $msg_bienvenida = ($config_sistema['mensaje_bienvenida'] ?? '¡Bienvenido!');
             echo json_encode([
                 'success' => true,
                 'type' => 'success',
-                'message' => '¡Registrado! Pasa tu DNI de nuevo para entrar.',
+                'message' => '¡Registro exitoso! ' . $msg_bienvenida,
                 'userData' => [
                     'nombre_completo' => $d['Paterno'].' '.$d['Materno'].', '.$d['Nombres'],
-                    'tipo_registro' => 'Registro',
+                    'tipo_registro' => $tipo_reg,
                     'fecha_hora' => date('d/m/Y H:i:s')
                 ]
             ]);
