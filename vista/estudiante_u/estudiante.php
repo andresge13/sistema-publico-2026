@@ -418,7 +418,7 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
 
       <main class="register-card">
         <div class="instruction-text">
-          <i class="fas fa-barcode me-2"></i> PASE SU CARNET O INGRESE SU DNI
+          <i class="fas fa-barcode me-2"></i> INGRESE SU DNI
         </div>
         <form id="formAsistencia">
           <input type="text" class="form-control dni-input" name="dni" id="dniInput"
@@ -468,9 +468,16 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
       }
     });
 
+    let isProcessing = false;
+
     function procesarAsistencia() {
+        if (isProcessing) return;
+        
         const dni = input.value;
         if (dni.length !== 8) return;
+
+        isProcessing = true;
+        //input.value = ''; // Despejar inmediatamente para evitar disparos dobles
 
         const formData = new FormData();
         formData.append('dni', dni);
@@ -481,18 +488,20 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
         })
         .then(res => res.json())
         .then(data => {
-            input.value = '';
             
-            Swal.fire({
-                icon: data.type || 'info',
-                title: data.success ? '¡Registro Exitoso!' : 'Aviso',
-                text: data.message,
-                background: '#fff',
-                color: '#2d3748',
-                showConfirmButton: false,
-                timer: 2500,
-                timerProgressBar: true
-            });
+            // Mostrar alerta flotante solo si hay algún error/advertencia (ej: no encontrado)
+            if (!data.success) {
+                Swal.fire({
+                    icon: data.type || 'info',
+                    title: 'Aviso',
+                    text: data.message,
+                    background: '#fff',
+                    color: '#2d3748',
+                    showConfirmButton: false,
+                    timer: 3000,
+                    timerProgressBar: true
+                });
+            }
 
             if (data.userData) {
                 const container = document.getElementById('feedbackContainer');
@@ -523,13 +532,17 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
                 }, 5000);
             }
             
-            if (<?php echo $modo_kiosko ? 'true' : 'false'; ?>) {
+            if (typeof updateAforoLive === 'function' && <?php echo $modo_kiosko ? 'true' : 'false'; ?>) {
                 updateAforoLive();
             }
         })
         .catch(err => {
             console.error('Error:', err);
             Swal.fire('Error', 'No se pudo procesar la solicitud', 'error');
+        })
+        .finally(() => {
+            input.value = ''; // Limpiar el input una vez finalizado el proceso
+            isProcessing = false;
         });
     }
 
