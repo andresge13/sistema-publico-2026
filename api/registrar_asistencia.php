@@ -152,14 +152,24 @@ try {
             $stmt->execute([$d['Nombres'], $d['Paterno'].' '.$d['Materno'], $d['Nro_Doc']]);
             $id_u = $pdo->lastInsertId();
             
-            // Facultades/Escuelas simplified for this context
+            // Facultades/Escuelas: Insertar dinámicamente si no existen
             $stmt_f = $pdo->prepare("SELECT id_facultad FROM facultades WHERE nombre_facultad = ?");
             $stmt_f->execute([$d['Facultad']]);
             $id_f = $stmt_f->fetchColumn() ?: null;
+            if (!$id_f && !empty($d['Facultad'])) {
+                $stmt_ins_f = $pdo->prepare("INSERT INTO facultades (nombre_facultad) VALUES (?)");
+                $stmt_ins_f->execute([$d['Facultad']]);
+                $id_f = $pdo->lastInsertId();
+            }
             
             $stmt_e = $pdo->prepare("SELECT id_escuela FROM escuelas WHERE nombre_escuela = ?");
             $stmt_e->execute([$d['Escuela']]);
             $id_esc = $stmt_e->fetchColumn() ?: null;
+            if (!$id_esc && !empty($d['Escuela']) && $id_f) {
+                $stmt_ins_e = $pdo->prepare("INSERT INTO escuelas (id_facultad, nombre_escuela) VALUES (?, ?)");
+                $stmt_ins_e->execute([$id_f, $d['Escuela']]);
+                $id_esc = $pdo->lastInsertId();
+            }
 
             $stmt_est = $pdo->prepare("INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, id_facultad, id_escuela, nivel_academico, anio_estudio) VALUES (?, ?, ?, ?, ?, ?)");
             $stmt_est->execute([$id_u, $d['Codigo']??'', $id_f, $id_esc, $d['Niv_Acad'], $d['anio_estudio']??'']);
