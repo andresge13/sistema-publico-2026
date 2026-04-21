@@ -198,7 +198,7 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
       border: 5px solid #cbd5e0;
       border-radius: 22px;
       font-weight: 800;
-      letter-spacing: 15px;
+      letter-spacing: 8px;
       color: var(--primary-color);
       background: #f8fafc;
       max-width: 650px;
@@ -418,11 +418,11 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
 
       <main class="register-card">
         <div class="instruction-text">
-          <i class="fas fa-barcode me-2"></i> INGRESE SU DNI
+          <i class="fas fa-barcode me-2"></i> INGRESE SU DNI O CÓDIGO UNIVERSITARIO
         </div>
         <form id="formAsistencia">
           <input type="text" class="form-control dni-input" name="dni" id="dniInput"
-            placeholder="DNI" maxlength="8" pattern="[0-9]{8}" autocomplete="off" required autofocus>
+            placeholder="DNI - CÓDIGO" maxlength="10" autocomplete="off" required autofocus>
         </form>
 
         <div id="feedbackContainer" style="display: none;"></div>
@@ -463,7 +463,7 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
 
     input.addEventListener('input', function() {
       this.value = this.value.replace(/[^0-9]/g, '');
-      if (this.value.length === 8) {
+      if (this.value.length === 8 || this.value.length === 10) {
           procesarAsistencia();
       }
     });
@@ -474,7 +474,7 @@ $notificacion_aforo = verificarAforo($pdo, $config_sistema);
         if (isProcessing) return;
         
         const dni = input.value;
-        if (dni.length !== 8) return;
+        if (dni.length !== 8 && dni.length !== 10) return;
 
         isProcessing = true;
         //input.value = ''; // Despejar inmediatamente para evitar disparos dobles
