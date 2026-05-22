@@ -183,9 +183,37 @@ try {
                     $pdo->prepare("INSERT INTO estudiantes_unheval (id_usuario, codigo_universitario, id_facultad, id_escuela, nivel_academico, anio_estudio) VALUES (?, ?, ?, ?, ?, ?)")
                         ->execute([$id_u, $codigo_u, $id_f, $id_esc, $d['Niv_Acad'], $d['anio_estudio']??'']);
                 } else {
-                    // Ya tiene registro, actualizar código universitario si está vacío
-                    $pdo->prepare("UPDATE estudiantes_unheval SET codigo_universitario = ? WHERE id_usuario = ? AND (codigo_universitario IS NULL OR codigo_universitario = '')")
-                        ->execute([$codigo_u, $id_u]);
+                    // Ya tiene registro, actualizar código universitario y datos faltantes de facultad/escuela
+                    $stmt_upd_est = $pdo->prepare("SELECT codigo_universitario, id_facultad, id_escuela FROM estudiantes_unheval WHERE id_usuario = ?");
+                    $stmt_upd_est->execute([$id_u]);
+                    $est_actual = $stmt_upd_est->fetch(PDO::FETCH_ASSOC);
+                    
+                    $upd_codigo = (!empty($codigo_u) && (empty($est_actual['codigo_universitario']))) ? $codigo_u : $est_actual['codigo_universitario'];
+                    $upd_id_f = $est_actual['id_facultad'];
+                    $upd_id_e = $est_actual['id_escuela'];
+                    
+                    // Si falta facultad o escuela, intentar completar desde API
+                    if (empty($upd_id_f) && !empty($d['Facultad'])) {
+                        $stmt_f2 = $pdo->prepare("SELECT id_facultad FROM facultades WHERE nombre_facultad = ?");
+                        $stmt_f2->execute([$d['Facultad']]);
+                        $upd_id_f = $stmt_f2->fetchColumn() ?: null;
+                        if (!$upd_id_f) {
+                            $pdo->prepare("INSERT INTO facultades (nombre_facultad) VALUES (?)")->execute([$d['Facultad']]);
+                            $upd_id_f = $pdo->lastInsertId();
+                        }
+                    }
+                    if (empty($upd_id_e) && !empty($d['Escuela'])) {
+                        $stmt_e2 = $pdo->prepare("SELECT id_escuela FROM escuelas WHERE nombre_escuela = ?");
+                        $stmt_e2->execute([$d['Escuela']]);
+                        $upd_id_e = $stmt_e2->fetchColumn() ?: null;
+                        if (!$upd_id_e && $upd_id_f) {
+                            $pdo->prepare("INSERT INTO escuelas (id_facultad, nombre_escuela) VALUES (?, ?)")->execute([$upd_id_f, $d['Escuela']]);
+                            $upd_id_e = $pdo->lastInsertId();
+                        }
+                    }
+                    
+                    $pdo->prepare("UPDATE estudiantes_unheval SET codigo_universitario = ?, id_facultad = ?, id_escuela = ? WHERE id_usuario = ?")
+                        ->execute([$upd_codigo, $upd_id_f, $upd_id_e, $id_u]);
                 }
 
                 // Registrar asistencia para el usuario existente (usando la misma lógica de re-entrada)
@@ -229,9 +257,10 @@ try {
                 ]);
             } else {
                 // Usuario totalmente nuevo: insertar y registrar asistencia
+                $apellidos_completos = trim(($d['Paterno'] ?? '') . ' ' . ($d['Materno'] ?? ''));
                 $stmt_ins_u = $pdo->prepare("INSERT INTO usuarios (nombres, apellidos, dni, genero, id_tipo_usuario, id_estado, fecha_registro, fecha_fin_registro, usuario_creacion) 
                                              VALUES (?, ?, ?, 'M', 1, 1, CURDATE(), CONCAT(YEAR(CURDATE()), '-12-30'), 'SISTEMA_PUBLICO')");
-                $stmt_ins_u->execute([$d['Nombres'], $d['Paterno'].' '.$d['Materno'], $dni_api]);
+                $stmt_ins_u->execute([$d['Nombres'], $apellidos_completos, $dni_api]);
                 $id_u = $pdo->lastInsertId();
 
                 $stmt_f = $pdo->prepare("SELECT id_facultad FROM facultades WHERE nombre_facultad = ?");
